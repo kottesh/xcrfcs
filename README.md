@@ -1,8 +1,11 @@
-A simple X cursor focus using XCB
+A simple X pointer focus (xptrf) using XCB.
 
-## TODO
+## Roadmap
 
-- [ ] create a circle window
-- [ ] update the window content with some zooming effects(a.k.a slight magnification)
-- [ ] listen to cursor position, update window content move it. 
-- [ ] create simple animation
+- [ ] create a circular window
+- [ ] replace the pointer with window 
+- [ ] update the graphic content of the window with right below screen. 
+- [ ] cover the whole display with translucent black or white window.
+
+**May be...**  
+- [ ] create in and out animation

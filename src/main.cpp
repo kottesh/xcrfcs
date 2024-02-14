@@ -1,84 +1,135 @@
 #include <iostream>
 
 extern "C" {
-    #include <xcb/xcb.h>
-    #include <xcb/shape.h>
-    #include <unistd.h>
+#include <xcb/xcb.h>
+#include <xcb/shape.h>
+
+#include <unistd.h>
 }
 
-int main() {
-    xcb_connection_t *conn;
-    xcb_screen_t *screen;
+struct MagInfo {
+    uint16_t width;
+    uint16_t height;
+    int8_t maxzoom;
 
-    conn = xcb_connect(NULL, NULL);
+    MagInfo():width(148), height(148), maxzoom(4) {} /* Default */
+
+    MagInfo(uint16_t width, uint16_t height, int8_t maxzoom) {
+        this->width = width;
+        this->height = height;
+        this->maxzoom = maxzoom;
+    }
+};
+
+int main() {
+    MagInfo lens; 
+
+    xcb_connection_t *conn; 
+    xcb_screen_t *screen;
+    xcb_window_t win_id;
+
+    conn = xcb_connect(nullptr, nullptr);
 
     if(!xcb_connection_has_error(conn)) {
         std::cout << "X server connect: OK\n";
     } else {
-        std::cerr << "X server connect: Failed\n";
+        std::cerr << "X server connect: FAILED\n";
         return 1;
     }
 
     screen = xcb_setup_roots_iterator(xcb_get_setup(conn)).data;
+    win_id = xcb_generate_id(conn);
 
-    xcb_window_t winId = xcb_generate_id(conn);
 
-    uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK;
-    uint32_t mask_values[] = {
+    uint32_t mask = XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT;
+    const uint32_t mask_values[] = {
         screen->white_pixel,
-        1, 
-        XCB_EVENT_MASK_EXPOSURE
+        1
     };
 
     xcb_create_window(
         conn,
         screen->root_depth,
-        winId,
+        win_id,
         screen->root,
         0,
         0,
-        128,
-        128,
-        0,
+        lens.width,
+        lens.height,
+        0, 
         XCB_WINDOW_CLASS_INPUT_OUTPUT,
         screen->root_visual,
         mask,
         mask_values
     );
 
-    xcb_map_window(conn, winId);
+    xcb_map_window(conn, win_id);
     xcb_flush(conn);
 
-    xcb_get_geometry_reply_t *wininfo;
-    xcb_query_pointer_reply_t *pointer;
-    int16_t winoffset[2];
+    xcb_grab_pointer_cookie_t grab_cookie = xcb_grab_pointer(
+        conn,
+        false,
+        screen->root,
+        XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_POINTER_MOTION,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_GRAB_MODE_ASYNC,
+        XCB_NONE,
+        XCB_NONE,
+        XCB_CURRENT_TIME 
+    );
 
-    while(true) {
-        wininfo = xcb_get_geometry_reply(conn, xcb_get_geometry(conn, winId), NULL);
-        pointer = xcb_query_pointer_reply(conn, xcb_query_pointer(conn, screen->root), NULL);
+    xcb_grab_pointer_reply_t *grab_reply = xcb_grab_pointer_reply(conn, grab_cookie, nullptr);
 
-        /* making sure window doesn't half in size */
-        winoffset[0] = (pointer->root_x + wininfo->width) > screen->width_in_pixels ? 
-                        (screen->width_in_pixels - wininfo->width):
-                        pointer->root_x;
-        winoffset[1] = (pointer->root_y + wininfo->height) > screen->height_in_pixels? 
-                        (screen->height_in_pixels- wininfo->height):
-                        pointer->root_y;
-
-        std::cout << "wininfo: " << wininfo->x << ", " << wininfo->y << "\n";
-        std::cout << "calc winoffset: " << winoffset[0] << ", " << winoffset[1] << "\n\n";
-
-        xcb_configure_window(
-            conn,
-            winId,
-            XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y,
-            winoffset
-        );
-
-        xcb_flush(conn);
+    if(grab_reply) {
+        if(grab_reply->status == XCB_GRAB_STATUS_SUCCESS) {
+                std::cout << "Grab Status: OK\n";
+        } else {
+            std::cerr << "Grab Status: FAILED\n";
+            exit(EXIT_FAILURE);
+        }
+        delete grab_reply;
+    } else {
+        std::cerr << "xcb_grab returned NULL\n";
+        exit(EXIT_FAILURE);
     }
 
+    uint16_t GMASK = XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y;
+
+    bool run = true;
+    xcb_generic_event_t *event;
+    while(run) {
+        event = xcb_wait_for_event(conn);
+
+        switch(event->response_type & ~0x80) {
+            case XCB_BUTTON_PRESS: {
+                xcb_button_press_event_t *e = (xcb_button_press_event_t*)event;
+                if(e->detail == XCB_BUTTON_INDEX_1) {
+                    std::cout << "Killing window...\n";
+                    xcb_destroy_window(conn, win_id);
+                    run = false;
+                }
+                break;
+            }
+            case XCB_MOTION_NOTIFY: {
+                xcb_motion_notify_event_t *e = (xcb_motion_notify_event_t*)event;
+                xcb_configure_window(
+                    conn,
+                    win_id,
+                    GMASK,
+                    (uint32_t[]){(uint32_t)e->event_x, (uint32_t)e->event_y}
+                );
+                xcb_flush(conn);
+                break; 
+            }
+            default:
+                std::cout << "Unknown event: " << (event->response_type & ~0x80) << "\n";
+                break;
+        }
+        free(event);
+    }
+
+    std::cout << "Closing connection\n";
     xcb_disconnect(conn);
 
-    return 0;
+    return EXIT_SUCCESS;
 }
